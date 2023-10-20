@@ -1,0 +1,9 @@
+/dist
+.vscode
+/node_modules
+/.next
+/out
+/home
+/build
+.DS_Store
+**/.DS_Store
