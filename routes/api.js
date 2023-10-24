@@ -1,33 +1,68 @@
 var express = require('express');
 var router = express.Router();
-var crypto=require('crypto');
 var {request, ghRequest} = require('./../utils');
+var {client_id, client_secret, redirect_uri, access_token, repoOwner} = require('./../config/config.json');
 
 /*
-    access_token: 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
-    scope: repo,user
-    token_type: bearer
+    数据存储在config.json中，结构如下：
+    [
+        {id: '111', title: '标题11111', abstract: '摘要摘要', tags: '1,2,3,4', author: '作者', created_at: '', updated_at: ''},
+        ...
+    ]
 */
+
 const toBase64 = (str) => {
-    return new Buffer.from(str).toString("base64");
+    return new Buffer.from(str, 'utf-8').toString("base64");
 }
-const sha = (str='') => {
-    var obj = crypto.createHash('sha256');
-    obj.update(str);
-    return obj.digest('hex');
+const toJson = (str) => {
+    return new Buffer.from(str, 'base64').toString('utf-8');
+}
+var resp = (code=0, data={}, message='') => {
+    let result = data;
+    try{
+        result = JSON.parse(data);
+    }catch(e){}
+    if(code === 0) {
+        return {code, data: result, message: message || '成功'}
+    }else{
+        return {code, data: result, message: message || '服务器内部错误'}
+    }
+};
+var reject = (code=0, data={}, message='') => {
+    let result = data;
+    try{
+        if(data.hasOwnProperty('code') && data.hasOwnProperty('data') && data.hasOwnProperty('message')) {
+            return data;
+        }else if(typeof data === 'string') {
+            result = JSON.parse(data);
+        }else if(data?.message && !message) {
+            result = {};
+            message = data.message;
+        }
+    }catch(e){};
+
+    if(code === 0) {
+        return {code, data: result, message: message || '成功'}
+    }else{
+        return {code, data: result, message: message || '服务器内部错误'}
+    }
 };
 
+// 获取access_token
 router.get('/gh/authorize', function (req, res, next) {
     let obj = req.query,
         code = obj.code || '',
-        state = obj.state || '',
-        client_id = '18c2c94ee9c6ceb11646',
-        client_secret = 'f3714a4cb1c017a2e37218442213a4dd506cf2e2',
-        redirect_uri = 'http://localhost:5713/login',
-        query = (`client_id=${client_id}&client_secret=${client_secret}&code=${code}&redirect_uri=${redirect_uri}`),
         url = `https://github.com/login/oauth/access_token`;
-    
-    request(url, {method:'post', data: {client_id, client_secret, code, redirect_uri}}).then(response => {
+
+    request(url, {
+        method:'post',
+        data: {
+            client_id,
+            client_secret,
+            code,
+            redirect_uri
+        }
+    }).then(response => {
         res.json(resp(0, response));
     }).catch(e => {
         res.json(resp(-1, e));
@@ -35,10 +70,13 @@ router.get('/gh/authorize', function (req, res, next) {
 });
 // 获取用户信息，也可以判断用户是否登录
 router.get('/gh/user', function (req, res, next) {
-    ghRequest('/user').then(response => {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '';
+
+    ghRequest('/user', authorization).then(response => {
         res.json(resp(0, response));
     }).catch(e => {
-        res.json(e);
+        res.json(reject(-1, e));
     });
 });
 // 获取仓库
@@ -48,12 +86,14 @@ router.get('/gh/repo', function (req, res, next) {
     ghRequest(`/repos/${owner}/${repo}`).then(response => {
         res.json(resp(0, response));
     }).catch(e => {
-        reject(repo(-1, e));
+        res.json(reject(-1, e));
     });
 });
 // 创建仓库
 router.post('/gh/repo', function (req, res, next) {
     let body = req.body,
+        template_owner = 'yaming042',
+        template_repo = 'notem_template',
         name = `notem_${body.owner}`,
         description = body.desc || `我的笔记`;
 
@@ -61,19 +101,20 @@ router.post('/gh/repo', function (req, res, next) {
         return res.json({code: -1, data: {}, message: '参数异常'});
     }
 
-    ghRequest(`/user/repos`, {
+    // 注意：这里的模板仓库需要设置成 允许当成模板，否则会报资源不存在的错误
+    ghRequest(`/repos/${template_owner}/${template_repo}/generate`, {
         method: 'post',
         data: {
+            owner: body.owner,
             name,
             description,
-            homepage: '',
+            include_all_branches: false,
             private: false,
-            is_template: true,
         }
     }).then(response => {
         res.json(resp(0, response));
     }).catch(e => {
-        reject(repo(-1, e));
+        res.json(reject(-1, e));
     });
 });
 // 初始化仓库，新增 README.md 文件
@@ -91,7 +132,6 @@ router.put('/gh/init', function (req, res, next) {
     });
 });
 
-// f329913e8eedd90d0295ff62e50e64a0131318f5
 router.get('/gh/test', function (req, res, next) {
     // ghRequest(`/repos/yaming042/notem_yaming042/git/ref/heads/main`).then(response => {
     //     res.json(resp(0, response));
@@ -105,7 +145,7 @@ router.get('/gh/test', function (req, res, next) {
         res.json(resp(-1, e));
     });
 });
-router.post('/gh/dir', function (req, res, next) {
+router.post('/gh/dir111', function (req, res, next) {
     ghRequest(`/repos/yaming042/notem_yaming042/contents/note/test.json`, {
         method: 'put',
         data: {
@@ -136,123 +176,230 @@ router.post('/gh/dir', function (req, res, next) {
     // });
 });
 
-
-
-
-var access_token = "121.32bed1874d13e147194c8efe33f9f3a8.YGGBcEEzoADiDHk8hrIA437M65C4MIWfM3ZXpJQ.EKA6xA",
-    apiPrefix = 'http://pan.baidu.com',
-    projectDir = '/notem';
-
-var resp = (code=0, data={}, message='') => {
-    let result = data;
-    try{
-        result = JSON.parse(data);
-    }catch(e){}
-    if(code === 0) {
-        return {code, data: result, message: message || '成功'}
-    }else{
-        return {code, data: result, message: message || '服务器内部错误'}
-    }
-};
-
-/*
-    {
-        "expires_in": 2592000,
-        "refresh_token": "122.90e50b14bcf4a6a2ccc6dacda8766084.Y5HY-7Ai5yTVRpNzVrE6Dh-4SIa7VHlZKzyZ2kn.pvUtHg",
-        "access_token": "121.32bed1874d13e147194c8efe33f9f3a8.YGGBcEEzoADiDHk8hrIA437M65C4MIWfM3ZXpJQ.EKA6xA",
-        "session_secret": "",
-        "session_key": "",
-        "scope": "basic netdisk"
-    }
-*/
-// 根据code获取token
-router.get('/bdyp/token', function (req, res, next) {
-    let appKey = 'SVbKFCPzGzDDAfEZMcciMak9DPmLu0DX',
-        appSecret = 'cx8NziZjkYqF19FzKRuTGvcjfTwP3GWs',
-        redirect_uri = 'oob',
-        code = req.query.code,
-        url = `https://openapi.baidu.com/oauth/2.0/token?grant_type=authorization_code&code=${code}&client_id=${appKey}&client_secret=${appSecret}&redirect_uri=${redirect_uri}`
-
-    request(url, (error, response, body) => {
-        if (error) {
-            return res.json(resp(-1, error));
-        } else {
-            return res.json(resp(0, body));
+// 获取仓库文件夹列表
+router.get('/gh/dirlist', function (req, res, next) {
+    ghRequest(`/repos/yaming042/notem_yaming042/contents`).then(response => {
+        res.json(resp(0, response));
+    }).catch(e => {
+        res.json(reject(-1, e));
+    });
+});
+// 新建文件夹
+router.post('/gh/dir', function (req, res, next) {
+    const initContent = {},
+        newDirName = '测试文件夹';
+    ghRequest(`/repos/yaming042/notem_yaming042/contents/${newDirName}/config.json`, {
+        method: 'put',
+        data: {
+            message: '新增测试文件夹',
+            content: toBase64(JSON.stringify(initContent)),
         }
-    });
-
-});
-
-// 获取用户信息，也可以判断用户是否登录
-router.get('/bdyp/validate', function (req, res, next) {
-    let token = req.query.access_token || access_token;
-        url = `${apiPrefix}/rest/2.0/xpan/nas?method=uinfo&access_token=${token}`;
-
-    request(url).then(response => {
+    }).then(response => {
         res.json(resp(0, response));
     }).catch(e => {
         res.json(resp(-1, e));
     });
 });
 
-// 查询文件列表
-router.get('/bdyp/list', function (req, res, next) {
-    let token = req.query.access_token || access_token;
-        url = `${apiPrefix}/rest/2.0/xpan/file?method=list&access_token=${token}&dir=${projectDir}&showempty=1`;
+// 获取指定文件夹下的文件列表
+router.get('/gh/filelist', function (req, res, next) {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '',
+        type = req.query.type || '';
 
-    request(url).then(response => {
-        res.json(resp(0, response));
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/${type}/config.json`, authorization).then(response => {
+        let list = [];
+        try{
+            list = toJson(response?.content);
+        }catch(e){}
+
+        res.json(resp(0, list));
     }).catch(e => {
-        res.json(resp(-1, e));
+        res.json(reject(-1, e));
     });
 });
-// 获取文档列表
-router.get('/bdyp/doclist', function (req, res, next) {
-    let token = req.query.access_token || access_token;
-        url = `${apiPrefix}/rest/2.0/xpan/file?method=doclist&access_token=${token}&parent_path=${projectDir}&web=1`;
+// 获取指定文件的内容
+router.get('/gh/file', function (req, res, next) {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '',
+        path = req.query.path;
 
-    request(url).then(response => {
-        let baseUrl = ((response.info || [])[0] || {}).lodocpreview,
-            u = baseUrl + '&part_index=0&method=newinfo';
-
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/${path}`, authorization).then(response => {
         res.json(resp(0, response));
     }).catch(e => {
-        res.json(resp(-1, e));
+        res.json(reject(-1, e));
     });
 });
-router.get('/bdyp/docinfo', function (req, res, next) {
-    let url = req.query.url;
-    url += '&part_index=0&method=newinfo';
-    console.log(333, url)
-    request(url).then(response => {
-        console.log(222, response)
-        res.json(resp(0, response));
-    }).catch(e => {
-        console.log(111, e.message)
-        res.json(resp(-1, e));
-    });
-});
-
-
-
-// 创建notem文件夹，以后就是笔记的根目录
-router.post('/bdyp/newdir', function (req, res, next) {
-    let token = req.query.access_token || access_token;
-        url = `${apiPrefix}/rest/2.0/xpan/file?method=create&access_token=${token}`,
-        options = {
-            method: 'post',
-            data: {
-                isdir: 1, // 固定值 1
-                path: express.urlencoded(projectDir), // 文件夹路径
-                rtype: 0, // 重名就返回错误
+// 更新指定文件的内容，需要更新文件的 Blob sha
+router.put('/gh/file', function (req, res, next) {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '',
+        body = req.body,
+        type = body.type,
+        fileName = body.id,
+        fileSha = body.fileSha,
+        configSha = body.configSha || '',
+        configData = body.configData || [],
+        oneConfigData = {
+            id: fileName,
+            title: body.title,
+            abstract: body.abstract,
+            tags: body.tags,
+            author: body.author,
+            created_at: body.created_at || '',
+            updated_at: body.updated_at || '',
+        },
+        newConfigData = configData.map(i => {
+            if(i.id+'' === fileName+'') {
+                return oneConfigData;
             }
-        }
 
-        request(url, options).then(response => {
-            res.json(resp(0, response));
+            return i;
+        }),
+        content = body.content || [];
+
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/${type}/${fileName}.json`, authorization, {
+        method: 'put',
+        data: {
+            message: `${fileName}-更新稿件`,
+            content: toBase64(JSON.stringify(content)),
+            sha: fileSha,
+        }
+    }).then(response => {
+        // 更新config文件
+        ghRequest(`/repos/${owner}/notem_${owner}/contents/${type}/config.json`, authorization, {
+            method: 'put',
+            data: {
+                message: `${fileName}-更新config.json`,
+                content: toBase64(JSON.stringify(newConfigData)),
+                sha: configSha,
+            }
+        }).then(r => {
+            res.json(resp(0, r));
         }).catch(e => {
-            res.json(resp(-1, e));
+            res.json(reject(-1, e));
         });
+    }).catch(e => {
+        res.json(reject(-1, e));
+    });
+});
+// 更新便签配置文件
+router.put('/gh/memofile', function (req, res, next) {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '',
+        body = req.body,
+        fileName = body.id || '',
+        content = body.content || [],
+        memoSha = body.memoSha;
+
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/memo.json`, authorization, {
+        method: 'put',
+        data: {
+            message: `${fileName}-更新便签`,
+            content: toBase64(JSON.stringify(content)),
+            sha: memoSha,
+        }
+    }).then(response => {
+        res.json(resp(0, response));
+    }).catch(e => {
+        res.json(reject(-1, e));
+    });
+});
+// 新增文件
+router.post('/gh/file', function (req, res, next) {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '',
+        body = req.body,
+        type = body.type,
+        fileName = body.id,
+        configSha = body.configSha || '',
+        configData = body.configData || [],
+        newConfigData = {
+            id: fileName,
+            title: body.title,
+            abstract: body.abstract,
+            tags: body.tags,
+            author: body.author,
+            created_at: body.created_at || '',
+            updated_at: body.created_at || '',
+        },
+        content = body.content || '';
+
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/${type}/${fileName}.json`, authorization, {
+        method: 'put',
+        data: {
+            message: `${fileName}-新增稿件`,
+            content: toBase64(JSON.stringify(content)),
+        }
+    }).then(async (response) => {
+        // 更新 便签 的memo.json文件
+        if(body.memoSha && body.memoConfig) {
+            await ghRequest(`/repos/${owner}/notem_${owner}/contents/memo.json`, authorization, {
+                method: 'put',
+                data: {
+                    message: `${fileName}-delete-config.json`,
+                    content: toBase64(JSON.stringify(body.memoConfig)),
+                    sha: body.memoSha,
+                }
+            });
+        }
+        // 更新 对应分类 下的config文件
+        ghRequest(`/repos/${owner}/notem_${owner}/contents/${type}/config.json`, authorization, {
+            method: 'put',
+            data: {
+                message: `${fileName}-更新config.json`,
+                content: toBase64(JSON.stringify(configData.concat([{...newConfigData}]))),
+                sha: configSha,
+            }
+        }).then(r => {
+            res.json(resp(0, r));
+        }).catch(e => {
+            res.json(reject(-1, e));
+        });
+    }).catch(e => {
+        res.json(reject(-1, e));
+    });
+});
+// 删除指定文件
+router.delete('/gh/file', function (req, res, next) {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '',
+        path = req.body.path,
+        fileSha = req.body.fileSha;
+
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/${path}`,{
+        method: 'delete',
+        data: {
+            message: '删除稿件',
+            sha: fileSha,
+        }
+    }).then(response => {
+        res.json(resp(0, response));
+    }).catch(e => {
+        res.json(reject(-1, e));
+    });
+});
+
+// 更新 memo.json
+router.put('/gh/memo', function (req, res, next) {
+    let authorization = req.cookies.Authorization || access_token || '',
+        owner = req.cookies.owner || repoOwner || '',
+        memoConfig = req.body.memoConfig || [],
+        memoSha = req.body.memoSha,
+        fileName = req.body.id;
+
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/memo.json`, authorization, {
+        method: 'put',
+        data: {
+            message: `${fileName}-update-config.json`,
+            content: toBase64(JSON.stringify(memoConfig)),
+            sha: memoSha,
+        }
+    }).then(response => {
+        res.json(resp(0, response));
+    }).catch(e => {
+        res.json(reject(-1, e));
+    });
 });
 
 module.exports = router;

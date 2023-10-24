@@ -30,7 +30,7 @@ const request = async (url, options = {}) => {
             'Content-Type': options.contentType || 'application/json'
         },
         data: isUrlEncoded ? qs.stringify(options.data || {}) : (isFormData ? options.data : JSON.stringify(options.data || {})), // 'PUT', 'POST', 和 'PATCH'时body的参数
-        timeout: options.timeout || 60000, // 超时时间 60秒
+        timeout: 600000, // 超时时间 60秒
         responseType: options.responseType || 'json', // 表示服务器响应的数据类型
     };
 
@@ -58,7 +58,7 @@ const request = async (url, options = {}) => {
             });
     });
 };
-const ghRequest = async (url, options = {}) => {
+const ghRequest = async (url, authorization='', options = {}) => {
     let isUrlEncoded = options.contentType === 'application/x-www-form-urlencoded',
         isFormData = options.contentType === 'multipart/form-data',
         requestUrl = url;
@@ -74,11 +74,11 @@ const ghRequest = async (url, options = {}) => {
         headers: {
             'Content-Type': options.contentType || 'application/json',
             'Accept': 'application/vnd.github+json',
-            'Authorization': `Bearer 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`,
-            'X-GitHub-Api-Version': '2022-11-28'
+            'Authorization': `Bearer ${authorization}`,
+            'X-GitHub-Api-Version': '2022-11-28',
         },
         data: isUrlEncoded ? qs.stringify(options.data || {}) : (isFormData ? options.data : JSON.stringify(options.data || {})), // 'PUT', 'POST', 和 'PATCH'时body的参数
-        timeout: options.timeout || 60000, // 超时时间 60秒
+        timeout: 60000, // 超时时间 60秒
         responseType: options.responseType || 'json', // 表示服务器响应的数据类型
     };
 
