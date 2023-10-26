@@ -1,16 +1,16 @@
 const axios = require('axios');
+const crypto = require('crypto');
+const { secretKey, algorithm } = require('./../config/config.json');
 
-const resp = (code=0, data={}, message='') => {
-    let result = data;
-    try{
-        result = JSON.parse(data);
-    }catch(e){}
-    if(code === 0) {
-        return {code, data: result, message: message || 'success'}
-    }else{
-        return {code, data: result, message: message || 'Internal Server Error'}
-    }
-};
+// 解密字符串
+function decrypt(text) {
+    const iv = Buffer.from(text.slice(0, 32), 'hex'); // 从加密文本中提取初始化向量
+    const encryptedText = text.slice(32);
+    const decipher = crypto.createDecipheriv(algorithm, Buffer.from(secretKey), iv);
+    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+}
 
 // 封装发送网络请求的方法
 const request = async (url, options = {}) => {
@@ -74,8 +74,9 @@ const ghRequest = async (url, authorization='', options = {}) => {
         headers: {
             'Content-Type': options.contentType || 'application/json',
             'Accept': 'application/vnd.github+json',
-            'Authorization': `Bearer ${authorization}`,
+            'Authorization': `Bearer ${decrypt(authorization)}`,
             'X-GitHub-Api-Version': '2022-11-28',
+            'x-ratelimit-reset': 60, // 速率限制，60秒后重试
         },
         data: isUrlEncoded ? qs.stringify(options.data || {}) : (isFormData ? options.data : JSON.stringify(options.data || {})), // 'PUT', 'POST', 和 'PATCH'时body的参数
         timeout: 60000, // 超时时间 60秒
@@ -83,8 +84,7 @@ const ghRequest = async (url, authorization='', options = {}) => {
     };
 
     return new Promise((resolve, reject) => {
-        let defaultError = {code: 101, data: null, message: '请求异常'},
-            responseError = {code: 102, data: null, message: '响应异常'};
+        let defaultError = {code: 101, data: null, message: '请求异常'};
 
         axios(ajaxOption)
             .then((response) => {
@@ -98,14 +98,15 @@ const ghRequest = async (url, authorization='', options = {}) => {
                 }
             }).catch(error => {
                 let errorCode = error?.response?.status;
-                if(errorCode === 404) {
-                    reject({code: -1, data: {}, message: '资源不存在'})
+                if(errorCode === 401) {
+                    reject({code: -401, data: {}, message: '授权过期'})
+                }else if(errorCode === 404) {
+                    reject({code: -404, data: {}, message: '资源不存在'})
                 }else if(errorCode === 301) {
-                    reject({code: -1, data: {}, message: '资源永久移除'})
+                    reject({code: -301, data: {}, message: '资源永久移除'})
                 }else if(errorCode === 403) {
-                    reject({code: -1, data: {}, message: '资源权限不足'})
+                    reject({code: -403, data: {}, message: '资源权限不足'})
                 }else{
-                    console.log(1, error)
                     reject(defaultError);
                 }
             });

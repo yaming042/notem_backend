@@ -1,7 +1,17 @@
 var express = require('express');
 var router = express.Router();
-var {request, ghRequest} = require('./../utils');
-var {client_id, client_secret, redirect_uri, access_token, repoOwner} = require('./../config/config.json');
+var crypto = require('crypto');
+var { request, ghRequest } = require('./../utils');
+var { client_id, client_secret, redirect_uri, secretKey, algorithm, template_owner, template_repo } = require('./../config/config.json');
+
+// 加密字符串
+function encrypt(text) {
+    const iv = crypto.randomBytes(16); // 生成随机的初始化向量
+    const cipher = crypto.createCipheriv(algorithm, Buffer.from(secretKey), iv);
+    let encrypted = cipher.update(text, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return iv.toString('hex') + encrypted;
+}
 
 /*
     数据存储在config.json中，结构如下：
@@ -17,45 +27,53 @@ const toBase64 = (str) => {
 const toJson = (str) => {
     return new Buffer.from(str, 'base64').toString('utf-8');
 }
-var resp = (code=0, data={}, message='') => {
+var resp = (code = 0, data = {}, message = '') => {
     let result = data;
-    try{
+    try {
         result = JSON.parse(data);
-    }catch(e){}
-    if(code === 0) {
-        return {code, data: result, message: message || '成功'}
-    }else{
-        return {code, data: result, message: message || '服务器内部错误'}
+    } catch (e) { }
+    if (code === 0) {
+        return { code, data: result, message: message || '成功' }
+    } else {
+        return { code, data: result, message: message || '服务器内部错误' }
     }
 };
-var reject = (code=0, data={}, message='') => {
+var reject = (code = 0, data = {}, message = '') => {
     let result = data;
-    try{
-        if(data.hasOwnProperty('code') && data.hasOwnProperty('data') && data.hasOwnProperty('message')) {
+    try {
+        if (data.hasOwnProperty('code') && data.hasOwnProperty('data') && data.hasOwnProperty('message')) {
             return data;
-        }else if(typeof data === 'string') {
+        } else if (typeof data === 'string') {
             result = JSON.parse(data);
-        }else if(data?.message && !message) {
+        } else if (data?.message && !message) {
             result = {};
             message = data.message;
         }
-    }catch(e){};
+    } catch (e) { };
 
-    if(code === 0) {
-        return {code, data: result, message: message || '成功'}
-    }else{
-        return {code, data: result, message: message || '服务器内部错误'}
+    if (code === 0) {
+        return { code, data: result, message: message || '成功' }
+    } else {
+        return { code, data: result, message: message || '服务器内部错误' }
     }
 };
 
+
 // 获取access_token
 router.get('/gh/authorize', function (req, res, next) {
-    let obj = req.query,
-        code = obj.code || '',
+    let code = req.query.code || '',
+        state = req.query.state || '',
         url = `https://github.com/login/oauth/access_token`;
 
+    let time = parseInt((state+'').substring(6)),
+        now = (new Date()).getTime();
+
+    if(now - time > 1000*60*10) {
+        return res.json({code: -1, data: {}, message: '链接失效，请重新操作'});
+    }
+
     request(url, {
-        method:'post',
+        method: 'post',
         data: {
             client_id,
             client_secret,
@@ -63,15 +81,31 @@ router.get('/gh/authorize', function (req, res, next) {
             redirect_uri
         }
     }).then(response => {
-        res.json(resp(0, response));
+        // 这里应该目前是不会执行的
+        console.log(`response: `, response);
     }).catch(e => {
-        res.json(resp(-1, e));
+        let key = 'access_token=';
+        if (typeof e === 'string' && e.indexOf(key) === 0) {
+            let token = e.substring(key.length).split('&')[0] || '';
+
+            if(token) {
+                res.cookie('Authorization', encrypt(token), { // token 加密
+                    httpOnly: true, // 设置 httpOnly 为 true
+                    expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7), // 设置过期时间为 7 天
+                });
+
+                res.json(resp(0, "授权成功"));
+            }else{
+                res.json(reject(-1, {message: '授权失败'}));
+            }
+        } else {
+            res.json(reject(-1, e));
+        }
     });
 });
 // 获取用户信息，也可以判断用户是否登录
 router.get('/gh/user', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '';
+    let authorization = req.cookies.Authorization || '';
 
     ghRequest('/user', authorization).then(response => {
         res.json(resp(0, response));
@@ -79,11 +113,19 @@ router.get('/gh/user', function (req, res, next) {
         res.json(reject(-1, e));
     });
 });
+// 退出登录
+router.get('/gh/logout', function (req, res, next) {
+    res.cookie('Authorization', '', {expires: -1});
+    res.json({code: 0, data: {}, message: '成功退出'});
+});
+
 // 获取仓库
 router.get('/gh/repo', function (req, res, next) {
-    let owner = req.query.owner,
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         repo = `notem_${owner}`;
-    ghRequest(`/repos/${owner}/${repo}`).then(response => {
+
+    ghRequest(`/repos/${owner}/${repo}`, authorization).then(response => {
         res.json(resp(0, response));
     }).catch(e => {
         res.json(reject(-1, e));
@@ -91,21 +133,20 @@ router.get('/gh/repo', function (req, res, next) {
 });
 // 创建仓库
 router.post('/gh/repo', function (req, res, next) {
-    let body = req.body,
-        template_owner = 'yaming042',
-        template_repo = 'notem_template',
-        name = `notem_${body.owner}`,
-        description = body.desc || `我的笔记`;
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
+        description = req.body.desc || `我的笔记`,
+        name = `notem_${owner}`;
 
-    if(!(body?.owner || '').trim() || !(body?.desc || '').trim()) {
-        return res.json({code: -1, data: {}, message: '参数异常'});
+    if (!owner || !description) {
+        return res.json({ code: -1, data: {}, message: '参数异常' });
     }
 
     // 注意：这里的模板仓库需要设置成 允许当成模板，否则会报资源不存在的错误
-    ghRequest(`/repos/${template_owner}/${template_repo}/generate`, {
+    ghRequest(`/repos/${template_owner}/${template_repo}/generate`, authorization, {
         method: 'post',
         data: {
-            owner: body.owner,
+            owner,
             name,
             description,
             include_all_branches: false,
@@ -117,101 +158,18 @@ router.post('/gh/repo', function (req, res, next) {
         res.json(reject(-1, e));
     });
 });
-// 初始化仓库，新增 README.md 文件
-router.put('/gh/init', function (req, res, next) {
-    ghRequest(`/repos/yaming042/notem_yaming042/contents/README.md`, {
-        method: 'put',
-        data: {
-            message: '首次提交',
-            content: toBase64('你好，世界！'),
-        }
-    }).then(response => {
-        res.json(resp(0, response));
-    }).catch(e => {
-        res.json(resp(-1, e));
-    });
-});
-
-router.get('/gh/test', function (req, res, next) {
-    // ghRequest(`/repos/yaming042/notem_yaming042/git/ref/heads/main`).then(response => {
-    //     res.json(resp(0, response));
-    // }).catch(e => {
-    //     res.json(resp(-1, e));
-    // });
-
-    ghRequest(`/repos/yaming042/notem_yaming042/git/trees/f329913e8eedd90d0295ff62e50e64a0131318f5`).then(response => {
-        res.json(resp(0, response));
-    }).catch(e => {
-        res.json(resp(-1, e));
-    });
-});
-router.post('/gh/dir111', function (req, res, next) {
-    ghRequest(`/repos/yaming042/notem_yaming042/contents/note/test.json`, {
-        method: 'put',
-        data: {
-            message: '测试文件夹',
-            content: toBase64('{name:123}'),
-        }
-    }).then(response => {
-        res.json(resp(0, response));
-    }).catch(e => {
-        res.json(resp(-1, e));
-    });
-    
-
-    // let body = req.body;
-
-    // ghRequest(`/repos/yaming042/notem_yaming042/git/trees`, {
-    //     method: 'post',
-    //     data: {
-    //         base_tree: 'f329913e8eedd90d0295ff62e50e64a0131318f5',
-    //         tree: [
-    //             {path: 'scratch', mode: '040000', type: 'tree', content: sha('123')},
-    //         ],
-    //     }
-    // }).then(response => {
-    //     res.json(resp(0, response));
-    // }).catch(e => {
-    //     res.json(resp(-1, e));
-    // });
-});
-
-// 获取仓库文件夹列表
-router.get('/gh/dirlist', function (req, res, next) {
-    ghRequest(`/repos/yaming042/notem_yaming042/contents`).then(response => {
-        res.json(resp(0, response));
-    }).catch(e => {
-        res.json(reject(-1, e));
-    });
-});
-// 新建文件夹
-router.post('/gh/dir', function (req, res, next) {
-    const initContent = {},
-        newDirName = '测试文件夹';
-    ghRequest(`/repos/yaming042/notem_yaming042/contents/${newDirName}/config.json`, {
-        method: 'put',
-        data: {
-            message: '新增测试文件夹',
-            content: toBase64(JSON.stringify(initContent)),
-        }
-    }).then(response => {
-        res.json(resp(0, response));
-    }).catch(e => {
-        res.json(resp(-1, e));
-    });
-});
 
 // 获取指定文件夹下的文件列表
 router.get('/gh/filelist', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '',
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         type = req.query.type || '';
 
     ghRequest(`/repos/${owner}/notem_${owner}/contents/${type}/config.json`, authorization).then(response => {
         let list = [];
-        try{
+        try {
             list = toJson(response?.content);
-        }catch(e){}
+        } catch (e) { }
 
         res.json(resp(0, list));
     }).catch(e => {
@@ -220,8 +178,8 @@ router.get('/gh/filelist', function (req, res, next) {
 });
 // 获取指定文件的内容
 router.get('/gh/file', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '',
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         path = req.query.path;
 
     ghRequest(`/repos/${owner}/notem_${owner}/contents/${path}`, authorization).then(response => {
@@ -232,8 +190,8 @@ router.get('/gh/file', function (req, res, next) {
 });
 // 更新指定文件的内容，需要更新文件的 Blob sha
 router.put('/gh/file', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '',
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         body = req.body,
         type = body.type,
         fileName = body.id,
@@ -250,7 +208,7 @@ router.put('/gh/file', function (req, res, next) {
             updated_at: body.updated_at || '',
         },
         newConfigData = configData.map(i => {
-            if(i.id+'' === fileName+'') {
+            if (i.id + '' === fileName + '') {
                 return oneConfigData;
             }
 
@@ -285,8 +243,8 @@ router.put('/gh/file', function (req, res, next) {
 });
 // 更新便签配置文件
 router.put('/gh/memofile', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '',
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         body = req.body,
         fileName = body.id || '',
         content = body.content || [],
@@ -307,8 +265,8 @@ router.put('/gh/memofile', function (req, res, next) {
 });
 // 新增文件
 router.post('/gh/file', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '',
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         body = req.body,
         type = body.type,
         fileName = body.id,
@@ -333,7 +291,7 @@ router.post('/gh/file', function (req, res, next) {
         }
     }).then(async (response) => {
         // 更新 便签 的memo.json文件
-        if(body.memoSha && body.memoConfig) {
+        if (body.memoSha && body.memoConfig) {
             await ghRequest(`/repos/${owner}/notem_${owner}/contents/memo.json`, authorization, {
                 method: 'put',
                 data: {
@@ -348,7 +306,7 @@ router.post('/gh/file', function (req, res, next) {
             method: 'put',
             data: {
                 message: `${fileName}-更新config.json`,
-                content: toBase64(JSON.stringify(configData.concat([{...newConfigData}]))),
+                content: toBase64(JSON.stringify(configData.concat([{ ...newConfigData }]))),
                 sha: configSha,
             }
         }).then(r => {
@@ -362,12 +320,12 @@ router.post('/gh/file', function (req, res, next) {
 });
 // 删除指定文件
 router.delete('/gh/file', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '',
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         path = req.body.path,
         fileSha = req.body.fileSha;
 
-    ghRequest(`/repos/${owner}/notem_${owner}/contents/${path}`,{
+    ghRequest(`/repos/${owner}/notem_${owner}/contents/${path}`, {
         method: 'delete',
         data: {
             message: '删除稿件',
@@ -382,8 +340,8 @@ router.delete('/gh/file', function (req, res, next) {
 
 // 更新 memo.json
 router.put('/gh/memo', function (req, res, next) {
-    let authorization = req.cookies.Authorization || access_token || '',
-        owner = req.cookies.owner || repoOwner || '',
+    let authorization = req.cookies.Authorization || '',
+        owner = req.cookies.owner || '',
         memoConfig = req.body.memoConfig || [],
         memoSha = req.body.memoSha,
         fileName = req.body.id;
