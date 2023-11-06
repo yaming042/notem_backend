@@ -85,21 +85,14 @@ router.get('/gh/authorize', function (req, res, next) {
         // 这里应该目前是不会执行的
         console.log(`response: `, response);
     }).catch(e => {
-        let key = 'access_token=';
-        if (typeof e === 'string' && e.indexOf(key) === 0) {
-            let token = e.substring(key.length).split('&')[0] || '';
+        if(e?.access_token) {
+            res.cookie('Authorization', encrypt(e?.access_token), { // token 加密
+                httpOnly: true, // 设置 httpOnly 为 true
+                expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30), // 设置过期时间为 30 天
+            });
 
-            if(token) {
-                res.cookie('Authorization', encrypt(token), { // token 加密
-                    httpOnly: true, // 设置 httpOnly 为 true
-                    expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7), // 设置过期时间为 7 天
-                });
-
-                res.json(resp(0, "授权成功"));
-            }else{
-                res.json(reject(-1, {message: '授权失败'}));
-            }
-        } else {
+            res.json(resp(0, "授权成功"));
+        }else{
             res.json(reject(-1, e));
         }
     });
