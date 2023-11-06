@@ -68,7 +68,7 @@ router.get('/gh/authorize', function (req, res, next) {
     let time = parseInt((state+'').substring(6)),
         now = (new Date()).getTime();
 
-    if(now - time > 1000*60*10) {
+    if(now - time > 1000*60*10) { // 10 分钟有效期
         return res.json({code: -1, data: {}, message: '链接失效，请重新操作'});
     }
 
@@ -79,7 +79,8 @@ router.get('/gh/authorize', function (req, res, next) {
             client_secret,
             code,
             redirect_uri
-        }
+        },
+        accept: 'application/json',
     }).then(response => {
         // 这里应该目前是不会执行的
         console.log(`response: `, response);

@@ -3,7 +3,8 @@ const crypto = require('crypto');
 const { secretKey, algorithm } = require('./../config/config.json');
 
 // 解密字符串
-function decrypt(text) {
+function decrypt(text='') {
+    if(!text) return '';
     const iv = Buffer.from(text.slice(0, 32), 'hex'); // 从加密文本中提取初始化向量
     const encryptedText = text.slice(32);
     const decipher = crypto.createDecipheriv(algorithm, Buffer.from(secretKey), iv);
@@ -16,21 +17,23 @@ function decrypt(text) {
 const request = async (url, options = {}) => {
     let isUrlEncoded = options.contentType === 'application/x-www-form-urlencoded',
         isFormData = options.contentType === 'multipart/form-data',
-        requestUrl = url;
+        requestUrl = url,
+        headers = {'Content-Type': options.contentType || 'application/json'};
 
     if((!options.method || options.method?.toUpperCase === 'GET') && options.data && Object.keys(options.data).length) {
         requestUrl += `?${qs.stringify(options.data || {})}`;
+    }
+    if(options.accept) {
+        headers['Accept'] = options.accept;
     }
 
     let ajaxOption = {
         url: requestUrl,
         method: options.method || 'GET', // 默认 get
         baseURL: ``, // baseURL 将自动加在 `url` 前面，除非 `url` 是一个绝对 URL。
-        headers: {
-            'Content-Type': options.contentType || 'application/json'
-        },
+        headers,
         data: isUrlEncoded ? qs.stringify(options.data || {}) : (isFormData ? options.data : JSON.stringify(options.data || {})), // 'PUT', 'POST', 和 'PATCH'时body的参数
-        timeout: 600000, // 超时时间 60秒
+        timeout: 60000, // 超时时间 60秒
         responseType: options.responseType || 'json', // 表示服务器响应的数据类型
     };
 
